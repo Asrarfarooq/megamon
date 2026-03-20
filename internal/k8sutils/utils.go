@@ -9,6 +9,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	jobset "sigs.k8s.io/jobset/api/jobset/v1alpha2"
+	lws "sigs.k8s.io/lws/api/leaderworkerset/v1"
 )
 
 func GetNodePool(node *corev1.Node) (string, bool) {
@@ -39,6 +40,11 @@ func GetJobSetTerminalState(js *jobset.JobSet) (jobset.JobSetConditionType, bool
 			}
 		}
 	}
+	return "", false
+}
+
+// TODO, FIXME
+func GetLeaderWorkerSetTerminalState(lwsObj *lws.LeaderWorkerSet) (lws.LeaderWorkerSetConditionType, bool) {
 	return "", false
 }
 
@@ -135,6 +141,7 @@ func GetExpectedTPUNodePoolSize(node *corev1.Node) (int32, error) {
 	if err != nil {
 		return 0, err
 	}
+	// #nosec G115
 	return int32(product / acceleratorCount), nil
 }
 
