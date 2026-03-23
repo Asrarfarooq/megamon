@@ -31,6 +31,7 @@ import (
 
 type WorkloadReconciler struct {
 	client.Client
+	Name                   string
 	Scheme                 *runtime.Scheme
 	EventLog               aggregator.EventLog
 	LeaderWorkerSetEnabled bool
@@ -47,6 +48,9 @@ type WorkloadReconciler struct {
 }
 
 func (r *WorkloadReconciler) Init() {
+	if r.Name == "" {
+		r.Name = "workload-reconciler"
+	}
 	r.sliceOwnerMap = make(map[string]records.OwnerInfo)
 }
 
@@ -363,7 +367,7 @@ func (r *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 func (r *WorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	b := ctrl.NewControllerManagedBy(mgr).
-		Named("workload-reconciler").
+		Named(r.Name).
 		Watches(&jobset.JobSet{}, r.mapToStatic())
 
 	if r.LeaderWorkerSetEnabled {

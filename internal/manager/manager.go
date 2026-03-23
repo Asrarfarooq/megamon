@@ -395,6 +395,7 @@ func MustRun(ctx context.Context, cfg Config, restConfig *rest.Config, gkeClient
 	}
 
 	workloadReconciler := &controller.WorkloadReconciler{
+		Name:                      controllerName("workload-reconciler"),
 		Client:                    mgr.GetClient(),
 		Scheme:                    mgr.GetScheme(),
 		EventLog:                  agg.EventLog,
