@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"example.com/megamon/internal/aggregator/events"
+	"example.com/megamon/internal/aggregator"
 	"example.com/megamon/internal/records"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -20,12 +20,28 @@ func NewProducer() *Producer {
 	return &Producer{}
 }
 
-func (p *Producer) GenerateSummaries(ctx context.Context, now time.Time, store events.EventStore, sliceEnabled, lwsEnabled bool, report *records.Report) error {
+func (p *Producer) GenerateSummaries(ctx context.Context, now time.Time, eventLog aggregator.EventLog, sliceEnabled, lwsEnabled bool, report *records.Report) error {
 	jobsetContext := logf.IntoContext(ctx, log.WithValues("type", "jobsets"))
 	jobsetNodesContext := logf.IntoContext(ctx, log.WithValues("type", "jobset-nodes"))
 	nodePoolsContext := logf.IntoContext(ctx, log.WithValues("type", "nodepools"))
 	slicesContext := logf.IntoContext(ctx, log.WithValues("type", "slices"))
 	lwsContext := logf.IntoContext(ctx, log.WithValues("type", "leader-worker-sets"))
+
+	store := eventLog.GetStore()
+
+	// Populate latest upness from the observed store
+	report.JobSetsUp = eventLog.GetLatestObservedState("jobsets.json")
+	report.NodePoolsUp = eventLog.GetLatestObservedState("node-pools.json")
+
+	if !sliceEnabled {
+		report.JobSetNodesUp = eventLog.GetLatestObservedState("jobset-nodes.json")
+	}
+	if sliceEnabled {
+		report.SlicesUp = eventLog.GetLatestObservedState("slices.json")
+	}
+	if lwsEnabled {
+		report.LeaderWorkerSetsUp = eventLog.GetLatestObservedState("leader-worker-sets.json")
+	}
 
 	// Fetch all events from GCS for summarizing (consistent source of truth)
 	jsEvents, err := store.Get(jobsetContext, "jobsets.json")
@@ -64,10 +80,10 @@ func (p *Producer) GenerateSummaries(ctx context.Context, now time.Time, store e
 
 	// Update summaries
 	report.JobSetsUpSummaries = p.Summarize(jobsetContext, now, report.JobSetsUp, jsEvents)
+	report.NodePoolsUpSummaries = p.Summarize(nodePoolsContext, now, report.NodePoolsUp, nodePoolEvents)
 	if !sliceEnabled {
 		report.JobSetNodesUpSummaries = p.Summarize(jobsetNodesContext, now, report.JobSetNodesUp, jsNodeEvents)
 	}
-	report.NodePoolsUpSummaries = p.Summarize(nodePoolsContext, now, report.NodePoolsUp, nodePoolEvents)
 	if sliceEnabled {
 		report.SlicesUpSummaries = p.Summarize(slicesContext, now, report.SlicesUp, sliceEvents)
 	}

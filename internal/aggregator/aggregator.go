@@ -128,20 +128,8 @@ func (a *Aggregator) Init() {
 func (a *Aggregator) Aggregate(ctx context.Context) error {
 	report := records.NewReport()
 
-	report.JobSetsUp = a.EventLog.GetLatestObservedState("jobsets.json")
-	if !a.SliceEnabled {
-		report.JobSetNodesUp = a.EventLog.GetLatestObservedState("jobset-nodes.json")
-	}
-	report.NodePoolsUp = a.EventLog.GetLatestObservedState("node-pools.json")
-	if a.SliceEnabled {
-		report.SlicesUp = a.EventLog.GetLatestObservedState("slices.json")
-	}
-	if a.LeaderWorkerSetEnabled {
-		report.LeaderWorkerSetsUp = a.EventLog.GetLatestObservedState("leader-worker-sets.json")
-	}
-
 	now := time.Now()
-	if err := a.SummaryProducer.GenerateSummaries(ctx, now, a.EventStore, a.SliceEnabled, a.LeaderWorkerSetEnabled, &report); err != nil {
+	if err := a.SummaryProducer.GenerateSummaries(ctx, now, a.EventLog, a.SliceEnabled, a.LeaderWorkerSetEnabled, &report); err != nil {
 		return fmt.Errorf("generating summaries: %w", err)
 	}
 

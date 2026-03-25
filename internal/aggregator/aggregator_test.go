@@ -35,7 +35,7 @@ type mockSummaryProducer struct {
 	aggregateCount int
 }
 
-func (m *mockSummaryProducer) GenerateSummaries(ctx context.Context, now time.Time, getter events.EventStore, sliceEnabled, lwsEnabled bool, report *records.Report) error {
+func (m *mockSummaryProducer) GenerateSummaries(ctx context.Context, now time.Time, eventLog EventLog, sliceEnabled, lwsEnabled bool, report *records.Report) error {
 	m.mtx.Lock()
 	defer m.mtx.Unlock()
 	m.aggregateCount++
@@ -67,6 +67,10 @@ func (m *mockEventLog) GetLatestObservedState(filename string) map[string]record
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.state[filename]
+}
+
+func (m *mockEventLog) GetStore() events.EventStore {
+	return m
 }
 
 func (m *mockEventLog) Get(ctx context.Context, filename string) (map[string]records.EventRecords, error) {

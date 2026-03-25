@@ -30,6 +30,7 @@ func NewEventLogImpl(store EventStore, threshold float64) *EventLogImpl {
 // AppendStateChange compares current upness values with historical GCS events. If changes are detected, it updates GCS.
 func (r *EventLogImpl) AppendStateChange(ctx context.Context, now time.Time, key string, ups map[string]records.Upness) (map[string]records.EventRecords, error) {
 	// Update in-memory observed store
+	log.V(3).Info("updating observed store", "key", key)
 	r.ObservedStore.Update(key, ups)
 
 	recs, err := r.Store.Get(ctx, key)
@@ -48,4 +49,8 @@ func (r *EventLogImpl) AppendStateChange(ctx context.Context, now time.Time, key
 
 func (r *EventLogImpl) GetLatestObservedState(key string) map[string]records.Upness {
 	return r.ObservedStore.Get(key)
+}
+
+func (r *EventLogImpl) GetStore() EventStore {
+	return r.Store
 }

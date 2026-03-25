@@ -15,10 +15,11 @@ type ResourcePoller interface {
 type EventLog interface {
 	AppendStateChange(ctx context.Context, now time.Time, key string, ups map[string]records.Upness) (map[string]records.EventRecords, error)
 	GetLatestObservedState(key string) map[string]records.Upness
+	GetStore() events.EventStore
 }
 
 type SummaryProducer interface {
-	GenerateSummaries(ctx context.Context, now time.Time, getter events.EventStore, sliceEnabled, lwsEnabled bool, report *records.Report) error
+	GenerateSummaries(ctx context.Context, now time.Time, eventLog EventLog, sliceEnabled, lwsEnabled bool, report *records.Report) error
 }
 
 type Exporter interface {
