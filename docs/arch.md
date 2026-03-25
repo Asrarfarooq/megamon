@@ -6,17 +6,23 @@ MegaMon follows a strictly unidirectional flow of information to ensure consiste
 ## Components
 
 ### 1. State Observers
-MegaMon uses two types of observers to monitor the cluster state:
+MegaMon uses two main types of observers to monitor the cluster state:
 
+#### A. Pollers
 - **Node Poller (`internal/aggregator/poller`)**
   - **Interface:** `ResourcePoller`
   - **Role:** Observes the state of GKE NodePools and Kubernetes Nodes on a regular interval.
   - **Logic:** It lists nodes and node pools, determines their "upness" based on conditions and TPU-specific labels, and passes this raw state to the **Event Log**.
 
+#### B. Reconcilers
 - **Workload Reconciler (`internal/controller`)**
   - **Role:** Observes state changes of Kubernetes JobSets, LeaderWorkerSets (LWS), and Slices using the `controller-runtime` watch mechanism.
   - **Logic:** Whenever an event occurs, it triggers a unified reconciliation that lists all workloads, computes their expected state, and calls the **Event Log** to persist transitions.
   - **Durability:** It maintains a **Slice Owner Map** to ensure slices are correctly tracked even when they are temporarily missing from the API server. This map is persisted in a Kubernetes **ConfigMap** to ensure state recovery across controller restarts.
+
+- **Pod Reconciler (`internal/controller/pod_reconciler.go`)**
+  - **Role:** Has a limited, specific role to discover where workloads are physically scheduled. It watches JobSet leader Pods to dynamically map Jobs/JobSets to specific GKE NodePools.
+  - **Logic:** It populates the in-memory `NodePoolScheduling` mapping within the Aggregator (which is eventually merged directly into the Global Report). It can also optionally label the Kubernetes `Job` with the scheduled node pool. Unlike the Workload Reconciler, it does *not* write state changes to the Event Log.
 
 ### 2. Event Log (`internal/aggregator/events`)
 - **Interface:** `EventLog`
@@ -28,7 +34,7 @@ MegaMon uses two types of observers to monitor the cluster state:
 ### 3. Summary Producer (`internal/aggregator/report`)
 - **Interface:** `SummaryProducer`
 - **Role:** Operates on a summary interval to produce a global report.
-- **Logic:** It fetches the full event log for all resources from the **Event Store** and calculates high-level reliability metrics, including:
+- **Logic:** It fetches historical event logs from the **Event Store** and the latest resource state (including transient `Attrs`) from the **Current Observed Store** (via the **Event Log**) to calculate high-level reliability metrics:
   - **MTTR** (Mean Time to Recovery)
   - **MTBI** (Mean Time Between Interruptions)
   - **Total Uptime/Downtime**
@@ -41,45 +47,54 @@ MegaMon uses two types of observers to monitor the cluster state:
 ## High-Level Data Flow
 
 ```text
-       [ Kubernetes API ]           [ GKE API ]
-               ^                        |
-    (Watch)    |             (Poll)     |
-               |                        v
-    +----------v----------+      +--------------+
-    | Workload Reconciler |      |  Node Poller |
-    +----------|----------+      +------|-------+
-          |    |                        |
- (Persist)|    |   [ Raw Upness State ] |
-          v    +-----------+------------+
-    +-------------+        |
-    | Slice Owner |        v
-    |   Map (CM)  |  +-----------------+
-    +-------------+  | Current Observed| (In-Memory)
-                     |      Store      |
-                     +--------|--------+
-                              |
-                              v
-                     +-----------------+
-                     |    Event Log    | <--- (AppendStateChange)
-                     +--------|--------+
-                           |
-                           v
-                 +-------------------+
-                 |  GCS Event Store  |
-                 +---------|---------+
-                           |
-                           | (Fetch All Records)
-                           v
-                 +-------------------+
-                 |  Summary Producer |
-                 +---------|---------+
-                           |
-                           v
-                  +-----------------+
-                  |  Global Report  |
-                  +--------|--------+
-                           |
-           +---------------+---------------+
+       [ Kubernetes API ]                   [ GKE API ]
+               ^                                |
+    (Watch)    |                     (Poll)     |
+      +--------+--------+                       |
+      |                 |                       v
++-----v------+   +------v-------+      +----------------+
+|  Workload  |   |     Pod      |      |  Node Poller   |
+| Reconciler |   |  Reconciler  |      |                |
++---|--------+   +------|-------+      +-------|--------+
+    |        |          |                      |
+(Persist)    |    (Scheduling)                 |
+    |        |          |                      |
+    v        |          v                      |
++-------------+  +-------------+               |
+| Slice Owner |  |  NodePool   |      [ Raw Upness State ]
+|  Map (CM)   |  | Sched. Map  |               |
++-------------+  +------|------+               v
+                        |            +------------------+
+                        |            | Current Observed | (In-Memory)
+                        |            |       Store      |
+                        |            +---------|--------+
+                        |                      |
+                        |                      v
+                        |            +------------------+
+                        |            |    Event Log     | <--- (AppendStateChange)
+                        |            +---------|--------+
+                        |                      |
+                        |                      v
+                        |            +------------------+
+                        |            | GCS Event Store  |
+                        |            +---------|--------+
+                        |                      |
+                        |            (Fetch    | (Fetch
+                        |           Observed)  | Events)
+                        |                |     |
+                        |                v     v
+                        |    +--------------------------------+
+                        |    |        Summary Producer        |
+                        |    +-----------------|--------------+
+                        |                      |
+                        +----------------------+
+                                     |
+                                     v
+                             +------------------+
+                             |  Global Report   |
+                             +---------|--------+
+                                       |
+                       +---------------+---------------+
            |                               |
            v                               v
     +--------------+               +---------------+
