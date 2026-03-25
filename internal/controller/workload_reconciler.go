@@ -166,11 +166,11 @@ func (r *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	uidMapKey := func(ns, name string) string {
 		return fmt.Sprintf("%s/%s", ns, name)
 	}
-	uidMap := map[string]string{}
+	jobsetUidMap := map[string]string{}
 
 	for _, js := range jobsetList.Items {
 		uid := string(js.UID)
-		uidMap[uidMapKey(js.Namespace, js.Name)] = uid
+		jobsetUidMap[uidMapKey(js.Namespace, js.Name)] = uid
 
 		attrs := utils.ExtractJobSetAttrs(&js)
 		specReplicas, readyReplicas := k8sutils.GetJobSetReplicas(&js)
@@ -198,7 +198,7 @@ func (r *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		for _, node := range nodeList.Items {
 			nodeStatus := k8sutils.IsNodeReady(&node)
 			if jsNS, jsName := k8sutils.GetJobSetForNode(&node); jsNS != "" && jsName != "" {
-				uid, ok := uidMap[uidMapKey(jsNS, jsName)]
+				uid, ok := jobsetUidMap[uidMapKey(jsNS, jsName)]
 				if !ok {
 					continue
 				}
@@ -216,6 +216,7 @@ func (r *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 	}
 
+	// TODO, not tested
 	if r.LeaderWorkerSetEnabled {
 		for _, lwsObj := range lwsList.Items {
 			uid := string(lwsObj.UID)
@@ -288,12 +289,12 @@ func (r *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		// as down in the event log to record an interruption.
 		for name, owner := range r.sliceOwnerMap {
 			if !observedSlices[name] {
-				ownerExists, ownerActive, err := r.getOwnerActiveStatus(ctx, owner.Kind, owner.Name, owner.Namespace)
+				ownerExists, ownerNotTerminal, err := r.getOwnerActiveStatus(ctx, owner.Kind, owner.Name, owner.Namespace)
 				if err != nil {
 					log.Error(err, "failed to get owner active status", "slice", name)
 				}
 
-				if ownerExists && ownerActive {
+				if ownerExists && ownerNotTerminal {
 					// Slice is missing but owner is active -> mark as down in event log
 					slicesUp[name] = records.Upness{
 						Attrs: records.Attrs{
@@ -306,7 +307,7 @@ func (r *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 						ExpectedDown:  false, // It's an UNEXPECTED downtime
 					}
 				} else {
-					// Owner is gone or inactive -> delete from map
+					// Owner is gone or not terminal -> delete from map
 					delete(r.sliceOwnerMap, name)
 					sliceOwnerMapChanged = true
 				}
@@ -383,6 +384,8 @@ func (r *WorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return b.Complete(r)
 }
 
+// mapToStatic generates a static event handler that maps any triggered event to a dummy reconciliation request.
+// This ensures a full cluster-wide reconciliation of all workloads when any watched resource changes.
 func (r *WorkloadReconciler) mapToStatic() handler.EventHandler {
 	return handler.EnqueueRequestsFromMapFunc(
 		func(ctx context.Context, obj client.Object) []reconcile.Request {
@@ -396,7 +399,9 @@ func (r *WorkloadReconciler) mapToStatic() handler.EventHandler {
 	)
 }
 
-func (r *WorkloadReconciler) getOwnerStatus(ctx context.Context, ownerKind, ownerName, ownerNamespace string) (bool, bool, error) {
+// getOwnerStatus checks the cluster for a workload owner (e.g. JobSet, LeaderWorkerSet) by its kind, name, and namespace.
+// Returns two booleans indicating if the owner exists and if it is in a terminal state, along with any error encountered.
+func (r *WorkloadReconciler) getOwnerStatus(ctx context.Context, ownerKind, ownerName, ownerNamespace string) (exists bool, terminal bool, err error) {
 	if ownerName == "" || ownerNamespace == "" {
 		return false, false, nil
 	}
@@ -425,7 +430,11 @@ func (r *WorkloadReconciler) getOwnerStatus(ctx context.Context, ownerKind, owne
 	return false, false, nil
 }
 
-func (r *WorkloadReconciler) getOwnerActiveStatus(ctx context.Context, ownerKind, ownerName, ownerNamespace string) (bool, bool, error) {
-	exists, terminal, err := r.getOwnerStatus(ctx, ownerKind, ownerName, ownerNamespace)
-	return exists, !terminal, err
+// getOwnerActiveStatus wraps getOwnerStatus to return whether an owner currently exists and is actively running.
+// Returns two booleans indicating if the owner exists and if it is active (non-terminal), along with any error.
+func (r *WorkloadReconciler) getOwnerActiveStatus(ctx context.Context, ownerKind, ownerName, ownerNamespace string) (exists bool, nonTerminal bool, err error) {
+	var terminal bool
+	exists, terminal, err = r.getOwnerStatus(ctx, ownerKind, ownerName, ownerNamespace)
+	nonTerminal = !terminal
+	return
 }

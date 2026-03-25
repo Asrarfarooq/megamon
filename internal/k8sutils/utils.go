@@ -43,7 +43,7 @@ func GetJobSetTerminalState(js *jobset.JobSet) (jobset.JobSetConditionType, bool
 	return "", false
 }
 
-// TODO, FIXME
+// TODO need to implement
 func GetLeaderWorkerSetTerminalState(lwsObj *lws.LeaderWorkerSet) (lws.LeaderWorkerSetConditionType, bool) {
 	return "", false
 }
