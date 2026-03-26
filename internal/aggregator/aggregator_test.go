@@ -63,6 +63,18 @@ func (m *mockEventLog) AppendStateChange(ctx context.Context, now time.Time, fil
 	return nil, nil
 }
 
+func (m *mockEventLog) AppendStateChanges(ctx context.Context, now time.Time, changes map[string]map[string]records.Upness) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.state == nil {
+		m.state = make(map[string]map[string]records.Upness)
+	}
+	for filename, ups := range changes {
+		m.state[filename] = ups
+	}
+	return nil
+}
+
 func (m *mockEventLog) GetLatestObservedState(filename string) map[string]records.Upness {
 	m.mu.Lock()
 	defer m.mu.Unlock()

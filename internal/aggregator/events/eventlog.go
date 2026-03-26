@@ -27,6 +27,16 @@ func NewEventLogImpl(store EventStore, threshold float64) *EventLogImpl {
 	}
 }
 
+// AppendStateChanges processes multiple resource upness updates serially and returns on the first failure.
+func (r *EventLogImpl) AppendStateChanges(ctx context.Context, now time.Time, changes map[string]map[string]records.Upness) error {
+	for key, ups := range changes {
+		if _, err := r.AppendStateChange(ctx, now, key, ups); err != nil {
+			return fmt.Errorf("failed to append state changes for %q: %w", key, err)
+		}
+	}
+	return nil
+}
+
 // AppendStateChange compares current upness values with historical GCS events. If changes are detected, it updates GCS.
 func (r *EventLogImpl) AppendStateChange(ctx context.Context, now time.Time, key string, ups map[string]records.Upness) (map[string]records.EventRecords, error) {
 	// Update in-memory observed store

@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/sync/errgroup"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -284,45 +283,23 @@ func (r *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 	}
 
-	// 3. Save to Event Log in parallel
-	g, gCtx := errgroup.WithContext(ctx)
-
-	g.Go(func() error {
-		if _, err := r.EventLog.AppendStateChange(gCtx, now, "jobsets.json", jobsetsUp); err != nil {
-			log.Error(err, "failed to append jobset state changes")
-		}
-		return nil
-	})
+	// 3. Save to Event Log in a single batch
+	changes := map[string]map[string]records.Upness{
+		"jobsets.json": jobsetsUp,
+	}
 
 	if !r.SliceEnabled {
-		g.Go(func() error {
-			if _, err := r.EventLog.AppendStateChange(gCtx, now, "jobset-nodes.json", jobsetNodesUp); err != nil {
-				log.Error(err, "failed to append jobset-nodes state changes")
-			}
-			return nil
-		})
+		changes["jobset-nodes.json"] = jobsetNodesUp
 	}
-
 	if r.LeaderWorkerSetEnabled {
-		g.Go(func() error {
-			if _, err := r.EventLog.AppendStateChange(gCtx, now, "leader-worker-sets.json", lwsUp); err != nil {
-				log.Error(err, "failed to append lws state changes")
-			}
-			return nil
-		})
+		changes["leader-worker-sets.json"] = lwsUp
 	}
-
 	if r.SliceEnabled {
-		g.Go(func() error {
-			if _, err := r.EventLog.AppendStateChange(gCtx, now, "slices.json", slicesUp); err != nil {
-				log.Error(err, "failed to append slice state changes")
-			}
-			return nil
-		})
+		changes["slices.json"] = slicesUp
 	}
 
-	if err := g.Wait(); err != nil {
-		log.Error(err, "event log parallel update failed")
+	if err := r.EventLog.AppendStateChanges(ctx, now, changes); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to append state changes: %w", err)
 	}
 
 	return ctrl.Result{}, nil
