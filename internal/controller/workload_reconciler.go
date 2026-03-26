@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -306,6 +307,13 @@ func (r *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 }
 
 func (r *WorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	podNamespace := os.Getenv("POD_NAMESPACE")
+	if podNamespace != "" && r.SliceOwnerMapConfigMapRef.Namespace != podNamespace {
+		ctrl.Log.WithName(r.Name).Info("warning: SliceOwnerMapConfigMapRef is in a different namespace than the reconciler",
+			"configMapNamespace", r.SliceOwnerMapConfigMapRef.Namespace,
+			"reconcilerNamespace", podNamespace)
+	}
+
 	b := ctrl.NewControllerManagedBy(mgr).
 		Named(r.Name).
 		Watches(&jobset.JobSet{}, r.mapToStatic())
