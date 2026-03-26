@@ -35,6 +35,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -71,6 +72,10 @@ var testCfg = manager.Config{
 	MetricsAddr:                "127.0.0.1:28080",
 	ProbeAddr:                  "127.0.0.1:28081",
 	UnknownCountThreshold:      0.1,
+	SliceOwnerMapConfigMapRef: types.NamespacedName{
+		Namespace: "default",
+		Name:      "test-slice-owner-map",
+	},
 }
 
 func TestControllers(t *testing.T) {

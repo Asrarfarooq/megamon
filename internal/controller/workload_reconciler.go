@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -39,77 +38,15 @@ type WorkloadReconciler struct {
 	UnknownCountThreshold  float64
 
 	SliceOwnerMapConfigMapRef types.NamespacedName
-
-	// sliceOwnerMap tracks the last known owner for each slice.
-	// key: slice name, value: owner info
-	sliceOwnerMapMtx    sync.RWMutex
-	sliceOwnerMap       map[string]records.OwnerInfo
-	sliceOwnerMapLoaded bool
 }
 
 func (r *WorkloadReconciler) Init() {
 	if r.Name == "" {
 		r.Name = "workload-reconciler"
 	}
-	r.sliceOwnerMap = make(map[string]records.OwnerInfo)
 }
 
 const sliceOwnerMapKey = "slice-owner-map.json"
-
-func (r *WorkloadReconciler) loadSliceOwnerMap(ctx context.Context) error {
-	r.sliceOwnerMapMtx.Lock()
-	defer r.sliceOwnerMapMtx.Unlock()
-
-	if r.sliceOwnerMapLoaded {
-		return nil
-	}
-
-	var cm corev1.ConfigMap
-	if err := r.Get(ctx, r.SliceOwnerMapConfigMapRef, &cm); err != nil {
-		if errors.IsNotFound(err) {
-			r.sliceOwnerMapLoaded = true
-			return nil
-		}
-		return fmt.Errorf("failed to get slice owner map ConfigMap: %w", err)
-	}
-
-	if data, ok := cm.Data[sliceOwnerMapKey]; ok {
-		if err := json.Unmarshal([]byte(data), &r.sliceOwnerMap); err != nil {
-			return fmt.Errorf("failed to unmarshal slice owner map: %w", err)
-		}
-	}
-	r.sliceOwnerMapLoaded = true
-	return nil
-}
-
-func (r *WorkloadReconciler) saveSliceOwnerMap(ctx context.Context) error {
-	r.sliceOwnerMapMtx.RLock()
-	data, err := json.Marshal(r.sliceOwnerMap)
-	r.sliceOwnerMapMtx.RUnlock()
-	if err != nil {
-		return fmt.Errorf("failed to marshal slice owner map: %w", err)
-	}
-
-	cm := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      r.SliceOwnerMapConfigMapRef.Name,
-			Namespace: r.SliceOwnerMapConfigMapRef.Namespace,
-		},
-	}
-
-	_, err = ctrl.CreateOrUpdate(ctx, r.Client, cm, func() error {
-		if cm.Data == nil {
-			cm.Data = make(map[string]string)
-		}
-		cm.Data[sliceOwnerMapKey] = string(data)
-		return nil
-	})
-	if err != nil {
-		return fmt.Errorf("failed to save slice owner map ConfigMap: %w", err)
-	}
-
-	return nil
-}
 
 // +kubebuilder:rbac:groups=jobset.x-k8s.io,resources=jobsets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=jobset.x-k8s.io,resources=jobsets/status,verbs=get
@@ -121,9 +58,18 @@ func (r *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	log := logf.FromContext(ctx).WithName("workload-reconciler")
 	log.V(3).Info("reconciling workloads")
 
+	var ownerMap map[string]records.OwnerInfo
 	if r.SliceEnabled {
-		if err := r.loadSliceOwnerMap(ctx); err != nil {
-			return ctrl.Result{}, fmt.Errorf("ensuring slice owner map is loaded: %w", err)
+		ownerMap = make(map[string]records.OwnerInfo)
+		var cm corev1.ConfigMap
+		if err := r.Get(ctx, r.SliceOwnerMapConfigMapRef, &cm); err != nil {
+			if !errors.IsNotFound(err) {
+				return ctrl.Result{}, fmt.Errorf("failed to get slice owner map ConfigMap: %w", err)
+			}
+		} else if data, ok := cm.Data[sliceOwnerMapKey]; ok {
+			if err := json.Unmarshal([]byte(data), &ownerMap); err != nil {
+				log.Error(err, "failed to unmarshal slice owner map, starting fresh")
+			}
 		}
 	}
 
@@ -238,7 +184,6 @@ func (r *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		// Slices are reconciled by observing the current state of Slices and their owners.
 		// We maintain a SliceOwnerMap to track the last known owner for each slice, allowing
 		// us to distinguish between expected (owner gone/terminal) and unexpected downtime.
-		r.sliceOwnerMapMtx.Lock()
 		sliceOwnerMapChanged := false
 		for _, s := range sliceList.Items {
 			observedSlices[s.Name] = true
@@ -248,8 +193,8 @@ func (r *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 				Namespace: attrs.SliceOwnerNamespace,
 				Name:      attrs.SliceOwnerName,
 			}
-			if r.sliceOwnerMap[s.Name] != owner {
-				r.sliceOwnerMap[s.Name] = owner
+			if ownerMap[s.Name] != owner {
+				ownerMap[s.Name] = owner
 				sliceOwnerMapChanged = true
 			}
 
@@ -287,7 +232,7 @@ func (r *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		// If a slice is in the map but not in the observed list, it has been deleted.
 		// We then check if its owner is still active. If it is, the slice is marked
 		// as down in the event log to record an interruption.
-		for name, owner := range r.sliceOwnerMap {
+		for name, owner := range ownerMap {
 			if !observedSlices[name] {
 				ownerExists, ownerNotTerminal, err := r.getOwnerActiveStatus(ctx, owner.Kind, owner.Name, owner.Namespace)
 				if err != nil {
@@ -308,16 +253,33 @@ func (r *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 					}
 				} else {
 					// Owner is gone or not terminal -> delete from map
-					delete(r.sliceOwnerMap, name)
+					delete(ownerMap, name)
 					sliceOwnerMapChanged = true
 				}
 			}
 		}
-		r.sliceOwnerMapMtx.Unlock()
 
 		if sliceOwnerMapChanged {
-			if err := r.saveSliceOwnerMap(ctx); err != nil {
-				log.Error(err, "failed to save slice owner map")
+			data, err := json.Marshal(ownerMap)
+			if err != nil {
+				log.Error(err, "failed to marshal slice owner map")
+			} else {
+				configMap := &corev1.ConfigMap{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      r.SliceOwnerMapConfigMapRef.Name,
+						Namespace: r.SliceOwnerMapConfigMapRef.Namespace,
+					},
+				}
+				_, err = ctrl.CreateOrUpdate(ctx, r.Client, configMap, func() error {
+					if configMap.Data == nil {
+						configMap.Data = make(map[string]string)
+					}
+					configMap.Data[sliceOwnerMapKey] = string(data)
+					return nil
+				})
+				if err != nil {
+					log.Error(err, "failed to save slice owner map ConfigMap")
+				}
 			}
 		}
 	}
