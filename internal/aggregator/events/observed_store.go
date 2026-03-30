@@ -31,6 +31,19 @@ func (s *CurrentObservedStore) Update(key string, ups map[string]records.Upness)
 	s.state[key] = cp
 }
 
+// UpdateBatch updates multiple resource keys under a single write lock.
+// This guarantees that periodic readers (like the SummaryProducer) see a consistent cross-resource snapshot.
+func (s *CurrentObservedStore) UpdateBatch(changes map[string]map[string]records.Upness) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for key, ups := range changes {
+		cp := make(map[string]records.Upness, len(ups))
+		maps.Copy(cp, ups)
+		s.state[key] = cp
+	}
+}
+
 func (s *CurrentObservedStore) Get(key string) map[string]records.Upness {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

@@ -28,21 +28,29 @@ func NewEventLogImpl(store EventStore, threshold float64) *EventLogImpl {
 }
 
 // AppendStateChanges processes multiple resource upness updates serially and returns on the first failure.
+// It batches the memory-store updates into a single lock so readers (like SummaryProducer) see a consistent atomic snapshot.
 func (r *EventLogImpl) AppendStateChanges(ctx context.Context, now time.Time, changes map[string]map[string]records.Upness) error {
+	log.V(3).Info("batch updating observed store", "count", len(changes))
+	r.ObservedStore.UpdateBatch(changes)
+
 	for key, ups := range changes {
-		if _, err := r.AppendStateChange(ctx, now, key, ups); err != nil {
+		if _, err := r.appendToEventStore(ctx, now, key, ups); err != nil {
 			return fmt.Errorf("failed to append state changes for %q: %w", key, err)
 		}
 	}
 	return nil
 }
 
-// AppendStateChange compares current upness values with historical GCS events. If changes are detected, it updates GCS.
+// AppendStateChange updates the in-memory observed state for a single resource and appends to GCS if required.
 func (r *EventLogImpl) AppendStateChange(ctx context.Context, now time.Time, key string, ups map[string]records.Upness) (map[string]records.EventRecords, error) {
 	// Update in-memory observed store
 	log.V(3).Info("updating observed store", "key", key)
 	r.ObservedStore.Update(key, ups)
 
+	return r.appendToEventStore(ctx, now, key, ups)
+}
+
+func (r *EventLogImpl) appendToEventStore(ctx context.Context, now time.Time, key string, ups map[string]records.Upness) (map[string]records.EventRecords, error) {
 	recs, err := r.Store.Get(ctx, key)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get %q: %w", key, err)
