@@ -58,3 +58,16 @@ func (s *CurrentObservedStore) Get(key string) map[string]records.Upness {
 	maps.Copy(cp, original)
 	return cp
 }
+
+// IsPopulated returns true if the store has received at least one update for each of the requested keys.
+func (s *CurrentObservedStore) IsPopulated(keys []string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for _, key := range keys {
+		if _, exists := s.state[key]; !exists {
+			return false
+		}
+	}
+	return true
+}

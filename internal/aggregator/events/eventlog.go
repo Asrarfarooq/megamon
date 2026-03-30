@@ -69,6 +69,10 @@ func (r *EventLogImpl) GetLatestObservedState(key string) map[string]records.Upn
 	return r.ObservedStore.Get(key)
 }
 
+func (r *EventLogImpl) IsPopulated(keys []string) bool {
+	return r.ObservedStore.IsPopulated(keys)
+}
+
 func (r *EventLogImpl) GetStore() EventStore {
 	return r.Store
 }

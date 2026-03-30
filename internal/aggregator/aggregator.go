@@ -87,11 +87,47 @@ func (a *Aggregator) Start(ctx context.Context) error {
 	t := time.NewTicker(a.AggregationInterval)
 	defer t.Stop()
 
+	// Determine required keys for initial readiness
+	requiredKeys := []string{records.EventKeyJobSets, records.EventKeyNodePools}
+	if a.SliceEnabled {
+		requiredKeys = append(requiredKeys, records.EventKeySlices)
+	} else {
+		requiredKeys = append(requiredKeys, records.EventKeyJobSetNodes)
+	}
+	if a.LeaderWorkerSetEnabled {
+		requiredKeys = append(requiredKeys, records.EventKeyLeaderWorkerSets)
+	}
+
+	gracePeriodTimeout := time.After(a.AggregationInterval * 3)
+	isPopulated := false
+
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-t.C:
+			// Ensure the application passes its readiness probe immediately
+			// even if observers haven't run yet, so K8s doesn't kill it.
+			a.reportMtx.Lock()
+			a.reportReady = true
+			a.reportMtx.Unlock()
+
+			if !isPopulated {
+				if !a.EventLog.IsPopulated(requiredKeys) {
+					select {
+					case <-gracePeriodTimeout:
+						log.Info("initial grace period expired, proceeding with available state", "requiredKeys", requiredKeys)
+						isPopulated = true
+					default:
+						log.Info("skipping aggregation, waiting for observers to populate initial state", "requiredKeys", requiredKeys)
+						continue
+					}
+				} else {
+					log.Info("initial state populated, proceeding with aggregation")
+					isPopulated = true
+				}
+			}
+
 			log.Info("aggregating")
 			start := time.Now()
 			if err := a.Aggregate(ctx); err != nil {

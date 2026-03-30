@@ -16,6 +16,7 @@ type EventLog interface {
 	AppendStateChange(ctx context.Context, now time.Time, key string, ups map[string]records.Upness) (map[string]records.EventRecords, error)
 	AppendStateChanges(ctx context.Context, now time.Time, changes map[string]map[string]records.Upness) error
 	GetLatestObservedState(key string) map[string]records.Upness
+	IsPopulated(keys []string) bool
 	GetStore() events.EventStore
 }
 
