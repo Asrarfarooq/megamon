@@ -466,40 +466,29 @@ func MustRun(ctx context.Context, cfg Config, restConfig *rest.Config, gkeClient
 		log.Error(err, "unable to add aggregator to manager")
 		os.Exit(1)
 	}
-	//wg.Add(1)
-	//go func() {
-	//	log.Println("starting aggregator")
-	//	defer wg.Done()
-	//	if err := agg.Start(ctx); err != nil {
-	//		if errors.Is(err, context.Canceled) {
-	//			log.Info("aggregator - context cancelled")
-	//		} else {
-	//			log.Error(err, "aggregator error")
-	//			os.Exit(1)
-	//		}
-	//	}
-	//}()
 
-	wg.Add(1)
-	go func() {
+	wg.Go(func() {
 		log.Info("starting metrics server")
-		defer wg.Done()
 		if err := metricsServer.ListenAndServe(); err != nil {
 			if errors.Is(err, http.ErrServerClosed) {
 				log.Info("metrics server closed")
-			} else if !errors.Is(err, context.Canceled) {
+			} else if errors.Is(err, context.Canceled) {
 				log.Info("metrics server - context cancelled")
 			} else {
 				log.Error(err, "metrics server error")
 				os.Exit(1)
 			}
 		}
-	}()
+	})
+
 	log.Info("starting manager")
 	if err := mgr.Start(ctx); err != nil {
 		log.Error(err, "problem running manager")
 	}
-	if err := metricsServer.Shutdown(context.Background()); err != nil {
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := metricsServer.Shutdown(shutdownCtx); err != nil {
 		log.Error(err, "failed to shutdown metrics server")
 	}
 

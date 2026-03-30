@@ -111,5 +111,7 @@ The `Aggregator` (`internal/aggregator/aggregator.go`) acts as the central coord
 1. **Polling Loop:** Triggers the `NodePoller` to refresh node-related data.
 2. **Aggregation Loop:** Triggers the `SummaryProducer` to generate the global report and subsequently calls all registered **Exporters**.
 
+To prevent exporting artificially empty metrics on startup, the Aggregation loop utilizes an `IsPopulated` check on the `EventLog`. It pauses report generation indefinitely until all critical observers (e.g., `NodePoller` and `WorkloadReconciler`) have written their initial state to the in-memory store at least once.
+
 ### Workload Reconciliation Trick
 The `WorkloadReconciler` uses a `mapToStatic` handler to ensure that any change to a JobSet, LWS, or Slice triggers a full reconciliation of all workloads. This ensures that the Event Log for these resource types is always consistent and reflects the latest cluster state without waiting for a polling interval.

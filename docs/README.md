@@ -45,6 +45,3 @@ MegaMon was created to address shortcoming of using [kube-state-metrics](https:/
 
 ## Experimental
 * (Untested/Broken) Set "LeaderWorkerSetEnabled" to enable support for LWS workloads
-
-## Behavioral Changes
-* **Metric Reporting Startup Delay:** MegaMon will not immediately publish metrics on startup. The Aggregation loop will pause and wait to export metrics until both the `NodePoller` and the `WorkloadReconciler` have populated the event log at least once. This ensures that the first published metrics report is not artificially "empty" due to an initialization race condition. A grace period timeout (3x the `AggregationInterval`) prevents the loop from pausing indefinitely. Because the `WorkloadReconciler` automatically watches cluster `Node` resources, it will generally fire immediately on startup, meaning metrics reporting will typically begin as soon as the initial cluster state is observed, even if there are zero active workloads (like `JobSet` or `Slice`).
