@@ -30,41 +30,43 @@ func (p *Producer) GenerateSummaries(ctx context.Context, now time.Time, eventLo
 	store := eventLog.GetStore()
 
 	// Populate latest upness from the observed store
-	report.JobSetsUp = eventLog.GetLatestObservedState("jobsets.json")
-	report.NodePoolsUp = eventLog.GetLatestObservedState("node-pools.json")
+	report.JobSetsUp = eventLog.GetLatestObservedState(records.EventKeyJobSets)
+	report.NodePoolsUp = eventLog.GetLatestObservedState(records.EventKeyNodePools)
 
 	if !sliceEnabled {
-		report.JobSetNodesUp = eventLog.GetLatestObservedState("jobset-nodes.json")
+		report.JobSetNodesUp = eventLog.GetLatestObservedState(records.EventKeyJobSetNodes)
 	}
+
 	if sliceEnabled {
-		report.SlicesUp = eventLog.GetLatestObservedState("slices.json")
+		report.SlicesUp = eventLog.GetLatestObservedState(records.EventKeySlices)
 	}
+
 	if lwsEnabled {
-		report.LeaderWorkerSetsUp = eventLog.GetLatestObservedState("leader-worker-sets.json")
+		report.LeaderWorkerSetsUp = eventLog.GetLatestObservedState(records.EventKeyLeaderWorkerSets)
 	}
 
 	// Fetch all events from GCS for summarizing (consistent source of truth)
-	jsEvents, err := store.Get(jobsetContext, "jobsets.json")
+	jsEvents, err := store.Get(jobsetContext, records.EventKeyJobSets)
 	if err != nil {
 		return fmt.Errorf("getting jobset events from GCS: %w", err)
 	}
 
 	var jsNodeEvents map[string]records.EventRecords
 	if !sliceEnabled {
-		jsNodeEvents, err = store.Get(jobsetNodesContext, "jobset-nodes.json")
+		jsNodeEvents, err = store.Get(jobsetNodesContext, records.EventKeyJobSetNodes)
 		if err != nil {
 			return fmt.Errorf("getting jobset node events from GCS: %w", err)
 		}
 	}
 
-	nodePoolEvents, err := store.Get(nodePoolsContext, "node-pools.json")
+	nodePoolEvents, err := store.Get(nodePoolsContext, records.EventKeyNodePools)
 	if err != nil {
 		return fmt.Errorf("getting nodepool events from GCS: %w", err)
 	}
 
 	var sliceEvents map[string]records.EventRecords
 	if sliceEnabled {
-		sliceEvents, err = store.Get(slicesContext, "slices.json")
+		sliceEvents, err = store.Get(slicesContext, records.EventKeySlices)
 		if err != nil {
 			return fmt.Errorf("getting slice events from GCS: %w", err)
 		}
@@ -72,7 +74,7 @@ func (p *Producer) GenerateSummaries(ctx context.Context, now time.Time, eventLo
 
 	var lwsEvents map[string]records.EventRecords
 	if lwsEnabled {
-		lwsEvents, err = store.Get(lwsContext, "leader-worker-sets.json")
+		lwsEvents, err = store.Get(lwsContext, records.EventKeyLeaderWorkerSets)
 		if err != nil {
 			return fmt.Errorf("getting lws events from GCS: %w", err)
 		}

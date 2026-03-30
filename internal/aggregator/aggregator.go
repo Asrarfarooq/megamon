@@ -75,8 +75,8 @@ func (a *Aggregator) Start(ctx context.Context) error {
 						return
 					}
 
-					if _, err := a.EventLog.AppendStateChange(ctx, time.Now(), "node-pools.json", ups); err != nil {
-						log.Error(err, "failed to append node pool state changes")
+					if _, err := a.EventLog.AppendStateChange(ctx, time.Now(), records.EventKeyNodePools, ups); err != nil {
+						log.Error(err, "failed to append nodepools state change")
 					}
 				}()
 			}

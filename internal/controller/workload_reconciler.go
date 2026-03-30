@@ -58,16 +58,16 @@ func (r *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	log := logf.FromContext(ctx).WithName("workload-reconciler")
 	log.V(3).Info("reconciling workloads")
 
-	var ownerMap map[string]records.OwnerInfo
+	var sliceOwnerMap map[string]records.OwnerInfo
 	if r.SliceEnabled {
-		ownerMap = make(map[string]records.OwnerInfo)
+		sliceOwnerMap = make(map[string]records.OwnerInfo)
 		var cm corev1.ConfigMap
 		if err := r.Get(ctx, r.SliceOwnerMapConfigMapRef, &cm); err != nil {
 			if !errors.IsNotFound(err) {
 				return ctrl.Result{}, fmt.Errorf("failed to get slice owner map ConfigMap: %w", err)
 			}
 		} else if data, ok := cm.Data[sliceOwnerMapKey]; ok {
-			if err := json.Unmarshal([]byte(data), &ownerMap); err != nil {
+			if err := json.Unmarshal([]byte(data), &sliceOwnerMap); err != nil {
 				log.Error(err, "failed to unmarshal slice owner map, starting fresh")
 			}
 		}
@@ -104,10 +104,46 @@ func (r *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	// 2. Compute Upness and update maps
+	jobsetsUp, jobsetNodesUp := r.processJobSets(jobsetList, nodeList)
+
+	lwsUp := make(map[string]records.Upness)
+	if r.LeaderWorkerSetEnabled {
+		lwsUp = r.processLeaderWorkerSets(lwsList)
+	}
+
+	slicesUp := make(map[string]records.Upness)
+	if r.SliceEnabled {
+		slicesUp = r.processSlices(ctx, sliceList, sliceOwnerMap)
+	}
+
+	// 3. Save to Event Log in a single batch
+	changes := map[string]map[string]records.Upness{
+		records.EventKeyJobSets: jobsetsUp,
+	}
+
+	if !r.SliceEnabled {
+		changes[records.EventKeyJobSetNodes] = jobsetNodesUp
+	}
+	if r.LeaderWorkerSetEnabled {
+		changes[records.EventKeyLeaderWorkerSets] = lwsUp
+	}
+	if r.SliceEnabled {
+		changes[records.EventKeySlices] = slicesUp
+	}
+
+	if err := r.EventLog.AppendStateChanges(ctx, now, changes); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to append state changes: %w", err)
+	}
+
+	return ctrl.Result{}, nil
+}
+
+// processJobSets extracts upness status for JobSets and their underlying Nodes.
+// It evaluates JobSet replicas (expected vs ready) and, if slicing is disabled,
+// it also calculates node-level upness by mapping cluster nodes back to their owning JobSet.
+func (r *WorkloadReconciler) processJobSets(jobsetList jobset.JobSetList, nodeList corev1.NodeList) (map[string]records.Upness, map[string]records.Upness) {
 	jobsetsUp := make(map[string]records.Upness)
 	jobsetNodesUp := make(map[string]records.Upness)
-	lwsUp := make(map[string]records.Upness)
-	slicesUp := make(map[string]records.Upness)
 
 	uidMapKey := func(ns, name string) string {
 		return fmt.Sprintf("%s/%s", ns, name)
@@ -115,15 +151,15 @@ func (r *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	jobsetUidMap := map[string]string{}
 
 	for _, js := range jobsetList.Items {
-		uid := string(js.UID)
-		jobsetUidMap[uidMapKey(js.Namespace, js.Name)] = uid
+		jobsetUid := string(js.UID)
+		jobsetUidMap[uidMapKey(js.Namespace, js.Name)] = jobsetUid
 
 		attrs := utils.ExtractJobSetAttrs(&js)
 		specReplicas, readyReplicas := k8sutils.GetJobSetReplicas(&js)
 		state, isTerminal := k8sutils.GetJobSetTerminalState(&js)
 		expectedDown := isTerminal && state == jobset.JobSetCompleted
 
-		jobsetsUp[uid] = records.Upness{
+		jobsetsUp[jobsetUid] = records.Upness{
 			ExpectedCount: specReplicas,
 			ReadyCount:    readyReplicas,
 			Attrs:         attrs,
@@ -132,7 +168,7 @@ func (r *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 
 		if !r.SliceEnabled {
-			jobsetNodesUp[uid] = records.Upness{
+			jobsetNodesUp[jobsetUid] = records.Upness{
 				ExpectedCount: k8sutils.GetExpectedNodeCount(&js),
 				Attrs:         attrs,
 			}
@@ -162,148 +198,156 @@ func (r *WorkloadReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 	}
 
-	// TODO, not tested
-	if r.LeaderWorkerSetEnabled {
-		for _, lwsObj := range lwsList.Items {
-			uid := string(lwsObj.UID)
-			attrs := utils.ExtractLeaderWorkerSetAttrs(&lwsObj)
-			expectedReplicas := int32(1)
-			if lwsObj.Spec.Replicas != nil {
-				expectedReplicas = *lwsObj.Spec.Replicas
-			}
-			lwsUp[uid] = records.Upness{
-				ExpectedCount: expectedReplicas,
-				ReadyCount:    lwsObj.Status.ReadyReplicas,
-				Attrs:         attrs,
-			}
+	return jobsetsUp, jobsetNodesUp
+}
+
+// processLeaderWorkerSets extracts the upness status for all LeaderWorkerSets currently in the cluster.
+// It parses the list of LWS resources to evaluate how many replicas are expected versus how many are currently ready,
+// producing a map of raw upness metrics for the EventLog to persist.
+func (r *WorkloadReconciler) processLeaderWorkerSets(lwsList lws.LeaderWorkerSetList) map[string]records.Upness {
+	lwsUp := make(map[string]records.Upness)
+	for _, lwsObj := range lwsList.Items {
+		uid := string(lwsObj.UID)
+		attrs := utils.ExtractLeaderWorkerSetAttrs(&lwsObj)
+		expectedReplicas := int32(1)
+		if lwsObj.Spec.Replicas != nil {
+			expectedReplicas = *lwsObj.Spec.Replicas
+		}
+		lwsUp[uid] = records.Upness{
+			ExpectedCount: expectedReplicas,
+			ReadyCount:    lwsObj.Status.ReadyReplicas,
+			Attrs:         attrs,
 		}
 	}
+	return lwsUp
+}
 
+// processSlices evaluates the current state of Slices and their respective owners (e.g., JobSets).
+// It distinguishes between expected downtime (where the owner is terminating/gone) and unexpected interruptions
+// (where the Slice is deleted but the owner is still actively requesting it).
+// It also handles persisting the SliceOwnerMap to a ConfigMap to preserve memory of slices across controller restarts.
+func (r *WorkloadReconciler) processSlices(ctx context.Context, sliceList slicev1beta1.SliceList, sliceOwnerMap map[string]records.OwnerInfo) map[string]records.Upness {
+	log := logf.FromContext(ctx).WithName("workload-reconciler")
+	slicesUp := make(map[string]records.Upness)
+
+	// observedSlices tracks the currently existing Slices in the cluster during this reconciliation.
+	// We use this to compare against the ownerMap to detect if any Slices have been deleted
+	// and need interruption tracking.
 	observedSlices := make(map[string]bool)
-	if r.SliceEnabled {
-		// Slices are reconciled by observing the current state of Slices and their owners.
-		// We maintain a SliceOwnerMap to track the last known owner for each slice, allowing
-		// us to distinguish between expected (owner gone/terminal) and unexpected downtime.
-		sliceOwnerMapChanged := false
-		for _, s := range sliceList.Items {
-			observedSlices[s.Name] = true
-			attrs := utils.ExtractSliceAttrs(&s)
-			owner := records.OwnerInfo{
-				Kind:      attrs.SliceOwnerKind,
-				Namespace: attrs.SliceOwnerNamespace,
-				Name:      attrs.SliceOwnerName,
+
+	// Slices are reconciled by observing the current state of Slices and their owners.
+	// We maintain a SliceOwnerMap to track the last known owner for each slice, allowing
+	// us to distinguish between expected (owner gone/terminal) and unexpected downtime.
+	sliceOwnerMapChanged := false
+	for _, s := range sliceList.Items {
+		observedSlices[s.Name] = true
+		attrs := utils.ExtractSliceAttrs(&s)
+		owner := records.OwnerInfo{
+			Kind:      attrs.SliceOwnerKind,
+			Namespace: attrs.SliceOwnerNamespace,
+			Name:      attrs.SliceOwnerName,
+		}
+		if sliceOwnerMap[s.Name] != owner {
+			sliceOwnerMap[s.Name] = owner
+			sliceOwnerMapChanged = true
+		}
+
+		ownerExists, ownerTerminal, err := r.getOwnerStatus(ctx, attrs.SliceOwnerKind, attrs.SliceOwnerName, attrs.SliceOwnerNamespace)
+		if err != nil {
+			log.Error(err, "failed to get owner status", "slice", s.Name)
+		}
+
+		// isTerminating indicates if the Slice is in the process of being deleted.
+		// (Note: DeletionTimestamp is set by the API server when a deletion is requested,
+		// triggering a graceful termination phase if finalizers exist.)
+		isTerminating := !s.DeletionTimestamp.IsZero()
+		expectedDown := (!ownerExists || ownerTerminal)
+
+		up := records.Upness{
+			Attrs:         attrs,
+			ExpectedCount: 1,
+			ExpectedDown:  expectedDown,
+		}
+
+		// If the Slice is terminating (DeletionTimestamp is set), we treat it as Down (ReadyCount=0).
+		// This logic is defined above where isTerminating = !s.DeletionTimestamp.IsZero()
+		// If its owner is still active (expectedDown=false), this will correctly trigger an
+		// interruption event in the Event Log.
+		if !isTerminating {
+			// Only update upness metrics for non-terminating Slices.
+			for _, cond := range s.Status.Conditions {
+				if cond.Type == slicev1beta1.SliceStateConditionType {
+					switch cond.Status {
+					case metav1.ConditionTrue:
+						up.ReadyCount = 1
+					case metav1.ConditionUnknown:
+						up.UnknownCount = 1
+					}
+					break
+				}
 			}
-			if ownerMap[s.Name] != owner {
-				ownerMap[s.Name] = owner
+		}
+		slicesUp[s.Name] = up
+	}
+
+	// Reconcile observed slice state and SliceOwnerMap.
+	// If a slice is in the map but not in the observed list, it has been deleted.
+	// We then check if its owner is still active. If it is, the slice is marked
+	// as down in the event log to record an interruption.
+	for name, owner := range sliceOwnerMap {
+		if !observedSlices[name] {
+			ownerExists, ownerNotTerminal, err := r.getOwnerActiveStatus(ctx, owner.Kind, owner.Name, owner.Namespace)
+			if err != nil {
+				log.Error(err, "failed to get owner active status", "slice", name)
+			}
+
+			if ownerExists && ownerNotTerminal {
+				// Slice is missing but owner is active -> mark as down in event log
+				slicesUp[name] = records.Upness{
+					Attrs: records.Attrs{
+						SliceName:           name,
+						SliceOwnerKind:      owner.Kind,
+						SliceOwnerName:      owner.Name,
+						SliceOwnerNamespace: owner.Namespace,
+					},
+					ExpectedCount: 1,
+					ExpectedDown:  false, // It's an UNEXPECTED downtime
+				}
+			} else {
+				// Owner is gone or not terminal -> delete from map
+				delete(sliceOwnerMap, name)
 				sliceOwnerMapChanged = true
 			}
+		}
+	}
 
-			ownerExists, ownerTerminal, err := r.getOwnerStatus(ctx, attrs.SliceOwnerKind, attrs.SliceOwnerName, attrs.SliceOwnerNamespace)
+	// If the Slice-to-Owner mapping has changed during this reconciliation (e.g., new slices discovered
+	// or deleted slices removed), persist the updated map back to the Kubernetes ConfigMap.
+	if sliceOwnerMapChanged {
+		data, err := json.Marshal(sliceOwnerMap)
+		if err != nil {
+			log.Error(err, "failed to marshal slice owner map")
+		} else {
+			configMap := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      r.SliceOwnerMapConfigMapRef.Name,
+					Namespace: r.SliceOwnerMapConfigMapRef.Namespace,
+				},
+			}
+			_, err = ctrl.CreateOrUpdate(ctx, r.Client, configMap, func() error {
+				if configMap.Data == nil {
+					configMap.Data = make(map[string]string)
+				}
+				configMap.Data[sliceOwnerMapKey] = string(data)
+				return nil
+			})
 			if err != nil {
-				log.Error(err, "failed to get owner status", "slice", s.Name)
-			}
-
-			isTerminating := !s.DeletionTimestamp.IsZero()
-			expectedDown := (!ownerExists || ownerTerminal)
-
-			up := records.Upness{
-				Attrs:         attrs,
-				ExpectedCount: 1,
-				ExpectedDown:  expectedDown,
-			}
-
-			if !isTerminating {
-				for _, cond := range s.Status.Conditions {
-					if cond.Type == slicev1beta1.SliceStateConditionType {
-						switch cond.Status {
-						case metav1.ConditionTrue:
-							up.ReadyCount = 1
-						case metav1.ConditionUnknown:
-							up.UnknownCount = 1
-						}
-						break
-					}
-				}
-			}
-			slicesUp[s.Name] = up
-		}
-
-		// Reconcile observed slice state and SliceOwnerMap.
-		// If a slice is in the map but not in the observed list, it has been deleted.
-		// We then check if its owner is still active. If it is, the slice is marked
-		// as down in the event log to record an interruption.
-		for name, owner := range ownerMap {
-			if !observedSlices[name] {
-				ownerExists, ownerNotTerminal, err := r.getOwnerActiveStatus(ctx, owner.Kind, owner.Name, owner.Namespace)
-				if err != nil {
-					log.Error(err, "failed to get owner active status", "slice", name)
-				}
-
-				if ownerExists && ownerNotTerminal {
-					// Slice is missing but owner is active -> mark as down in event log
-					slicesUp[name] = records.Upness{
-						Attrs: records.Attrs{
-							SliceName:           name,
-							SliceOwnerKind:      owner.Kind,
-							SliceOwnerName:      owner.Name,
-							SliceOwnerNamespace: owner.Namespace,
-						},
-						ExpectedCount: 1,
-						ExpectedDown:  false, // It's an UNEXPECTED downtime
-					}
-				} else {
-					// Owner is gone or not terminal -> delete from map
-					delete(ownerMap, name)
-					sliceOwnerMapChanged = true
-				}
-			}
-		}
-
-		if sliceOwnerMapChanged {
-			data, err := json.Marshal(ownerMap)
-			if err != nil {
-				log.Error(err, "failed to marshal slice owner map")
-			} else {
-				configMap := &corev1.ConfigMap{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      r.SliceOwnerMapConfigMapRef.Name,
-						Namespace: r.SliceOwnerMapConfigMapRef.Namespace,
-					},
-				}
-				_, err = ctrl.CreateOrUpdate(ctx, r.Client, configMap, func() error {
-					if configMap.Data == nil {
-						configMap.Data = make(map[string]string)
-					}
-					configMap.Data[sliceOwnerMapKey] = string(data)
-					return nil
-				})
-				if err != nil {
-					log.Error(err, "failed to save slice owner map ConfigMap")
-				}
+				log.Error(err, "failed to save slice owner map ConfigMap")
 			}
 		}
 	}
 
-	// 3. Save to Event Log in a single batch
-	changes := map[string]map[string]records.Upness{
-		"jobsets.json": jobsetsUp,
-	}
-
-	if !r.SliceEnabled {
-		changes["jobset-nodes.json"] = jobsetNodesUp
-	}
-	if r.LeaderWorkerSetEnabled {
-		changes["leader-worker-sets.json"] = lwsUp
-	}
-	if r.SliceEnabled {
-		changes["slices.json"] = slicesUp
-	}
-
-	if err := r.EventLog.AppendStateChanges(ctx, now, changes); err != nil {
-		return ctrl.Result{}, fmt.Errorf("failed to append state changes: %w", err)
-	}
-
-	return ctrl.Result{}, nil
+	return slicesUp
 }
 
 func (r *WorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error {

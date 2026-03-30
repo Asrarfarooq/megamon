@@ -55,12 +55,12 @@ func TestAppendStateChange(t *testing.T) {
 		},
 	}
 
-	recs, err := reconciler.AppendStateChange(context.Background(), now, "jobsets.json", ups)
+	recs, err := reconciler.AppendStateChange(context.Background(), now, records.EventKeyJobSets, ups)
 	require.NoError(t, err)
 	require.NotNil(t, recs)
 
 	// Verify it put the records into fake GCS
-	saved, ok := fakeGCS.records["test-path/jobsets.json"]
+	saved, ok := fakeGCS.records["test-path/"+records.EventKeyJobSets]
 	require.True(t, ok)
 	require.Contains(t, saved, "obj1")
 }
