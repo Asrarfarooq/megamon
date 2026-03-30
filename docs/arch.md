@@ -17,8 +17,8 @@ MegaMon uses two main types of observers to monitor the cluster state:
 #### B. Reconcilers
 - **Workload Reconciler (`internal/controller`)**
   - **Role:** Observes state changes of Kubernetes JobSets, LeaderWorkerSets (LWS), and Slices using the `controller-runtime` watch mechanism.
-  - **Logic:** Whenever an event occurs, it triggers a unified reconciliation that lists all workloads, computes their expected state, and calls the **Event Log** to persist transitions.
-  - **Durability:** It maintains a **Slice Owner Map** to ensure slices are correctly tracked even when they are temporarily missing from the API server. This map is persisted in a Kubernetes **ConfigMap** to ensure state recovery across controller restarts.
+  - **Logic:** Whenever an event occurs, it triggers a unified reconciliation that delegates logic to resource-specific processors (`processJobSets`, `processLeaderWorkerSets`, `processSlices`). These processors compute expected vs. actual upness and call the **Event Log** to persist transitions in a single atomic batch.
+  - **Durability:** It utilizes a **Slice Owner Map**, stored in a Kubernetes **ConfigMap** and accessed via the `controller-runtime` cache, to ensure slices are correctly tracked even when they are temporarily missing from the API server. This allows the reconciler to remain stateless while ensuring state recovery across restarts.
 
 - **Pod Reconciler (`internal/controller/pod_reconciler.go`)**
   - **Role:** Has a limited, specific role to discover where workloads are physically scheduled. It watches JobSet leader Pods to dynamically map Jobs/JobSets to specific GKE NodePools.
@@ -28,7 +28,7 @@ MegaMon uses two main types of observers to monitor the cluster state:
 - **Interface:** `EventLog`
 - **Role:** Acts as the system's memory. It manages state changes over time for every resource.
 - **Current Observed Store:** An in-memory cache (`CurrentObservedStore`) that holds the latest resource observations. It decouples the watchers/pollers from the main aggregation loop, allowing the Aggregator to remain stateless while keeping the persistent GCS Event Store lean (omitting transient point-in-time attributes).
-- **AppendStateChange:** When called by an observer, it fetches historical records from the **Event Store**, compares them with the new observation in the **Current Observed Store**, appends state change events (e.g., interruption, recovery) if necessary, and persists the updated log.
+- **AppendStateChange(s):** When called by an observer, it fetches historical records from the **Event Store**, compares them with the new observation in the **Current Observed Store**, appends state change events (e.g., interruption, recovery) if necessary, and persists the updated log. It supports both single resource updates and atomic batch updates of multiple resource types.
 - **Event Store:** Backed by Google Cloud Storage (GCS), where logs are stored as JSON files partitioned by resource type.
 
 ### 3. Summary Producer (`internal/aggregator/report`)
@@ -47,60 +47,61 @@ MegaMon uses two main types of observers to monitor the cluster state:
 ## High-Level Data Flow
 
 ```text
-       [ Kubernetes API ]                   [ GKE API ]
-               ^                                |
-    (Watch)    |                     (Poll)     |
-      +--------+--------+                       |
-      |                 |                       v
-+-----v------+   +------v-------+      +----------------+
-|  Workload  |   |     Pod      |      |  Node Poller   |
-| Reconciler |   |  Reconciler  |      |                |
-+---|--------+   +------|-------+      +-------|--------+
-    |        |          |                      |
-(Persist)    |    (Scheduling)                 |
-    |        |          |                      |
-    v        |          v                      |
-+-------------+  +-------------+               |
-| Slice Owner |  |  NodePool   |      [ Raw Upness State ]
-|  Map (CM)   |  | Sched. Map  |               |
-+-------------+  +------|------+               v
-                        |            +------------------+
-                        |            | Current Observed | (In-Memory)
-                        |            |       Store      |
-                        |            +---------|--------+
-                        |                      |
-                        |                      v
-                        |            +------------------+
-                        |            |    Event Log     | <--- (AppendStateChange)
-                        |            +---------|--------+
-                        |                      |
-                        |                      v
-                        |            +------------------+
-                        |            | GCS Event Store  |
-                        |            +---------|--------+
-                        |                      |
-                        |            (Fetch    | (Fetch
-                        |           Observed)  | Events)
-                        |                |     |
-                        |                v     v
-                        |    +--------------------------------+
-                        |    |        Summary Producer        |
-                        |    +-----------------|--------------+
-                        |                      |
-                        +----------------------+
-                                     |
-                                     v
-                             +------------------+
-                             |  Global Report   |
-                             +---------|--------+
-                                       |
-                       +---------------+---------------+
-           |                               |
-           v                               v
-    +--------------+               +---------------+
-    | OTEL Metrics |               | CMS Exporter  |
-    | (Prometheus) |               | (ConfigMap)   |
-    +--------------+               +---------------+
+     [ GKE API ]                               [ Kubernetes API ]
+          |                                            |
+       (Poll)                                       (Watch)
+          |                                            |
+          |                      +---------------------+---------------------+
+          v                      |                                           |
+  +---------------+    +---------v---------+                       +---------v---------+
+  |               |    |                   |                       |                   |
+  |  Node Poller  |    |  Pod Reconciler   |                       |Workload Reconciler| <---> [ ConfigMap ]
+  |               |    |                   |                       |                   |   (Slice Owner Map)
+  +-------+-------+    +---------+---------+                       +---------+---------+
+          |                      |                                           |
+          |                      v                                           |
+          |            +-------------------+                                 |
+          |            |     NodePool      |                                 |
+          |            |  Scheduling Map   |                                 |
+          |            +---------+---------+                                 |
+          |                      |                                           |
+          +----------------------+--------------------+                      |
+                                 |                    |                      |
+  [ Raw Upness State ]           |                    | [ Raw Upness State ] |
+                                 |                    |                      |
+                                 |                    v                      v
+                                 |        +------------------------------------------------+
+                                 |        |                   Event Log                    |
+                                 |        |                                                |
+                                 |        |  +--------------------+  +------------------+  |
+                                 |        |  |  Current Observed  |  | GCS Event Store  |  |
+                                 |        |  |  Store (In-Memory) |  |   (Persistent)   |  |
+                                 |        |  +---------+----------+  +--------+---------+  |
+                                 |        |            |                      |            |
+                                 |        +------------|----------------------|------------+
+                                 |                     |                      |
+                                 |             (Fetch Observed)         (Fetch Events)
+                                 |                     |                      |
+                                 |                     v                      v
+                                 |        +------------------------------------------------+
+                                 |        |                Summary Producer                |
+                                 |        +----------------------+-------------------------+
+                                 |                               |
+                                 | (Merge)                       | (Base Report)
+                                 +--------------------+          |
+                                                      |          |
+                                                      v          v
+                                          +------------------------------------------------+
+                                          |                 Global Report                  |
+                                          +----------------------+-------------------------+
+                                                                 |
+                                                 +---------------+---------------+
+                                                 |                               |
+                                                 v                               v
+                                          +---------------+               +---------------+
+                                          | OTEL Metrics  |               | CMS Exporter  |
+                                          | (Prometheus)  |               |  (ConfigMap)  |
+                                          +---------------+               +---------------+
 ```
 
 ## Implementation Details
