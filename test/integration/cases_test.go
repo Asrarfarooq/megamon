@@ -1142,11 +1142,30 @@ var _ = Describe("Event Summarization Logic", func() {
 		// 3. Check Downtime Durations
 		// Initial Down: t0 -> t1 = 10m
 		Expect(summary.DownTimeInitial).To(Equal(10*time.Minute), "DownTimeInitial mismatch")
+		Expect(summary.ProvisioningDuration).To(Equal(10*time.Minute), "ProvisioningDuration mismatch")
+		Expect(summary.ProvisioningState).To(Equal("success"), "ProvisioningState mismatch")
 
 		// Total Down Time: 10m + 30m + 10m = 50m
 		Expect(summary.DownTime).To(Equal(50*time.Minute), "Total DownTime mismatch")
 
 		// Total Up Time: 20m + 30m + 20m = 70m
 		Expect(summary.UpTime).To(Equal(70*time.Minute), "Total UpTime mismatch")
+	})
+
+	// Added to test provisioning duration for resources that never become UP.
+	It("should correctly summarize a flow that never becomes UP", func() {
+		t0, _ := time.Parse(time.RFC3339, "2024-01-01T00:00:00Z")
+		ctx := context.Background()
+		var rec records.EventRecords
+
+		// 1. T0: Component starts (Not Up yet)
+		records.AppendUpEvent(t0, &rec, false, false)
+
+		// Verify at T+30m (still provisioning)
+		now := t0.Add(30 * time.Minute)
+		summary := rec.Summarize(ctx, now)
+
+		Expect(summary.ProvisioningDuration).To(Equal(30*time.Minute), "ProvisioningDuration mismatch")
+		Expect(summary.ProvisioningState).To(Equal("provisioning"), "ProvisioningState mismatch")
 	})
 })

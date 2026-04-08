@@ -110,6 +110,12 @@ func Init(ctx context.Context, r Reporter, interval time.Duration, unknownThresh
 	)
 	fatal(err)
 
+	provisioningDuration, err := meter.Float64ObservableGauge(Prefix+".nodepool.provisioning.duration",
+		metric.WithDescription("Time spent provisioning."),
+		metric.WithUnit("s"),
+	)
+	fatal(err)
+
 	jobsetObservables, observeJobset := mustRegisterUpnessMetrics(Prefix+".jobset", meter, unknownThreshold)
 	var jobsetNodeObservables []metric.Observable
 	var observeJobsetNodes reportObserveFunc
@@ -133,6 +139,7 @@ func Init(ctx context.Context, r Reporter, interval time.Duration, unknownThresh
 	}
 	observables = append(observables, nodePoolJobScheduled)
 	observables = append(observables, buildInfo)
+	observables = append(observables, provisioningDuration)
 
 	_, err = meter.RegisterCallback(func(ctx context.Context, o metric.Observer) error {
 		// Emit build info (always 1, attributes carry the data)
@@ -153,6 +160,15 @@ func Init(ctx context.Context, r Reporter, interval time.Duration, unknownThresh
 			observeJobsetNodes(ctx, o, report.JobSetNodesUp, report.JobSetNodesUpSummaries)
 		}
 		observeNodePools(ctx, o, report.NodePoolsUp, report.NodePoolsUpSummaries)
+
+		// Emit nodepool provisioning duration
+		for _, summary := range report.NodePoolsUpSummaries {
+			if summary.ProvisioningState != "" {
+				attrs := append(OTELAttrs(summary.Attrs), attribute.String("provisioning_state", summary.ProvisioningState))
+				o.ObserveFloat64(provisioningDuration, summary.ProvisioningDuration.Seconds(), metric.WithAttributes(attrs...))
+			}
+		}
+
 		if sliceEnabled {
 			observeSlices(ctx, o, report.SlicesUp, report.SlicesUpSummaries)
 		}

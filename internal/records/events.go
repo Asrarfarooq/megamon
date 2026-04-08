@@ -55,6 +55,11 @@ type EventSummary struct {
 	MeanDownTimeBetweenRecovery time.Duration `json:"meanDownTimeBetweenRecovery"`
 	// MeanUpTimeBetweenInterruption - Mean Time Between Interruption
 	MeanUpTimeBetweenInterruption time.Duration `json:"meanUpTimeBetweenInterruption"`
+
+	// ProvisioningDuration is the time spent provisioning.
+	ProvisioningDuration time.Duration `json:"provisioningDuration"`
+	// ProvisioningState is the state of provisioning (provisioning or success).
+	ProvisioningState string `json:"provisioningState"`
 }
 
 func (r *EventRecords) Summarize(ctx context.Context, now time.Time) EventSummary {
@@ -73,6 +78,8 @@ func (r *EventRecords) Summarize(ctx context.Context, now time.Time) EventSummar
 	}
 	if n == 1 {
 		summary.DownTime = now.Sub(r.UpEvents[0].Timestamp)
+		summary.ProvisioningDuration = summary.DownTime
+		summary.ProvisioningState = "provisioning"
 		return summary
 	}
 	// Invalid or missing data:
@@ -83,6 +90,8 @@ func (r *EventRecords) Summarize(ctx context.Context, now time.Time) EventSummar
 
 	summary.DownTime = r.UpEvents[1].Timestamp.Sub(r.UpEvents[0].Timestamp)
 	summary.DownTimeInitial = r.UpEvents[1].Timestamp.Sub(r.UpEvents[0].Timestamp)
+	summary.ProvisioningDuration = summary.DownTimeInitial
+	summary.ProvisioningState = "success"
 
 	// up:        ___
 	// down:  ____|
