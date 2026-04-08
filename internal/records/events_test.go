@@ -44,7 +44,9 @@ func TestSummarize(t *testing.T) {
 			},
 			now: t0.Add(time.Hour),
 			expectedSummary: EventSummary{
-				DownTime: time.Hour,
+				DownTime:             time.Hour,
+				ProvisioningDuration: time.Hour,
+				ProvisioningState:    "provisioning",
 			},
 		},
 		"just up": {
@@ -60,8 +62,10 @@ func TestSummarize(t *testing.T) {
 			},
 			now: t0.Add(time.Hour),
 			expectedSummary: EventSummary{
-				DownTime:        time.Hour,
-				DownTimeInitial: time.Hour,
+				DownTime:             time.Hour,
+				DownTimeInitial:      time.Hour,
+				ProvisioningDuration: time.Hour,
+				ProvisioningState:    "success",
 			},
 		},
 		"up for 3 hours": {
@@ -77,9 +81,11 @@ func TestSummarize(t *testing.T) {
 			},
 			now: t0.Add(time.Hour + 3*time.Hour),
 			expectedSummary: EventSummary{
-				DownTimeInitial: time.Hour,
-				DownTime:        time.Hour,
-				UpTime:          3 * time.Hour,
+				DownTimeInitial:      time.Hour,
+				DownTime:             time.Hour,
+				UpTime:               3 * time.Hour,
+				ProvisioningDuration: time.Hour,
+				ProvisioningState:    "success",
 			},
 		},
 		"single interruption": {
@@ -105,6 +111,8 @@ func TestSummarize(t *testing.T) {
 				TotalUpTimeBetweenInterruption:  time.Hour,
 				MeanUpTimeBetweenInterruption:   time.Hour,
 				LatestUpTimeBetweenInterruption: time.Hour,
+				ProvisioningDuration:            time.Hour,
+				ProvisioningState:               "success",
 			},
 		},
 		"single interruption then down for an hour": {
@@ -387,6 +395,8 @@ func TestSummarize(t *testing.T) {
 				TotalUpTimeBetweenInterruption:  0, // Should be 0 because there are no interruptions
 				MeanUpTimeBetweenInterruption:   0, // No interruptions
 				LatestUpTimeBetweenInterruption: time.Hour,
+				ProvisioningDuration:            time.Hour,
+				ProvisioningState:               "success",
 			},
 		},
 	}
@@ -407,6 +417,8 @@ func TestSummarize(t *testing.T) {
 			require.Equal(t, tc.expectedSummary.TotalUpTimeBetweenInterruption, gotSum.TotalUpTimeBetweenInterruption, "TotalUpTimeBetweenInterruption")
 			require.Equal(t, tc.expectedSummary.MeanUpTimeBetweenInterruption, gotSum.MeanUpTimeBetweenInterruption, "MeanUpTimeBetweenInterruption")
 			require.Equal(t, tc.expectedSummary.LatestUpTimeBetweenInterruption, gotSum.LatestUpTimeBetweenInterruption, "LatestUpTimeBetweenInterruption")
+			require.Equal(t, tc.expectedSummary.ProvisioningDuration, gotSum.ProvisioningDuration, "ProvisioningDuration")
+			require.Equal(t, tc.expectedSummary.ProvisioningState, gotSum.ProvisioningState, "ProvisioningState")
 		})
 	}
 }
