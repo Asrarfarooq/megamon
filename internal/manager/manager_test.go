@@ -72,3 +72,38 @@ func TestConfigUnmarshal(t *testing.T) {
 		t.Errorf("Expected ReportConfigMapRef to retain default %v, got %v", expectedReportRef, cfg.ReportConfigMapRef)
 	}
 }
+
+func TestConfigUnmarshalBothConfigMaps(t *testing.T) {
+	configJSON := []byte(`{
+		"ReportConfigMapRef": {
+			"Namespace": "custom-report-namespace",
+			"Name": "custom-report-map"
+		},
+		"SliceOwnerMapConfigMapRef": {
+			"Namespace": "custom-slice-namespace",
+			"Name": "custom-slice-map"
+		}
+	}`)
+
+	cfg := Config{}
+
+	if err := json.Unmarshal(configJSON, &cfg); err != nil {
+		t.Fatalf("Failed to unmarshal config JSON: %v", err)
+	}
+
+	expectedReportRef := types.NamespacedName{
+		Namespace: "custom-report-namespace",
+		Name:      "custom-report-map",
+	}
+	if cfg.ReportConfigMapRef != expectedReportRef {
+		t.Errorf("Expected ReportConfigMapRef to be %v, got %v", expectedReportRef, cfg.ReportConfigMapRef)
+	}
+
+	expectedSliceRef := types.NamespacedName{
+		Namespace: "custom-slice-namespace",
+		Name:      "custom-slice-map",
+	}
+	if cfg.SliceOwnerMapConfigMapRef != expectedSliceRef {
+		t.Errorf("Expected SliceOwnerMapConfigMapRef to be %v, got %v", expectedSliceRef, cfg.SliceOwnerMapConfigMapRef)
+	}
+}

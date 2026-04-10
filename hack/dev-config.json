@@ -10,5 +10,14 @@
     "ClusterName": "tpu-provisioner-e2e-us-east5"
   },
   "EventsBucketName": "cool-machine-learning-megamon",
-  "DisableNodePoolJobLabelling": true
+  "DisableNodePoolJobLabelling": true,
+  "SliceEnabled": true,
+  "SliceOwnerMapConfigMapRef": {
+    "Namespace": "megamon-system",
+    "Name": "megamon-slice-owner-map"
+  },
+  "ReportConfigMapRef": {
+    "Namespace": "megamon-system",
+    "Name": "megamon-report"
+  }
 }
