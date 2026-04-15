@@ -1,6 +1,6 @@
 # Release Notes
 
-## Megamon 2026.01
+## v1.1.0
 
 ### New features and improvements
 * Initial support for Slice metrics (set `SliceEnabled` to true)
