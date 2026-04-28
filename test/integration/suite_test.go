@@ -35,6 +35,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -71,6 +72,10 @@ var testCfg = manager.Config{
 	MetricsAddr:                "127.0.0.1:28080",
 	ProbeAddr:                  "127.0.0.1:28081",
 	UnknownCountThreshold:      0.1,
+	SliceOwnerMapConfigMapRef: types.NamespacedName{
+		Namespace: "default",
+		Name:      "test-slice-owner-map",
+	},
 }
 
 func TestControllers(t *testing.T) {
@@ -109,12 +114,16 @@ func startTestEnv() (*envtest.Environment, *rest.Config, client.Client) {
 	return testEnv, cfg, k8sClient
 }
 
-func startManager(ctx context.Context, enableSlice bool, restCfg *rest.Config) string {
+func startManager(ctx context.Context, enableSlice bool, restCfg *rest.Config, aggregationPeriodOverride int) string {
 	cfg := testCfg
 	cfg.MetricsPrefix = fmt.Sprintf("megamon.test.%d", time.Now().UnixNano())
+	cfg.EventsBucketName = fmt.Sprintf("test-bucket-%d", time.Now().UnixNano())
 	cfg.OptionalControllerSuffix = cfg.MetricsPrefix
 	expectedMetricPrefix = strings.ReplaceAll(cfg.MetricsPrefix, ".", "_")
 	cfg.SliceEnabled = enableSlice
+	if aggregationPeriodOverride > 0 {
+		cfg.AggregationIntervalSeconds = int64(aggregationPeriodOverride)
+	}
 
 	// Use dynamic ports to avoid conflicts
 	cfg.MetricsAddr = fmt.Sprintf("127.0.0.1:%d", findFreePort())
@@ -137,9 +146,21 @@ func startManager(ctx context.Context, enableSlice bool, restCfg *rest.Config) s
 			return fmt.Errorf("status %d", resp.StatusCode)
 		}
 		return nil
-	}, "10s", "100ms").Should(Succeed())
+	}, "10s", "10ms").Should(Succeed())
 
 	return cfg.MetricsAddr
+}
+
+func stopManager(cancel context.CancelFunc, metricsAddr string) {
+	cancel()
+	Eventually(func() error {
+		conn, err := net.DialTimeout("tcp", metricsAddr, 100*time.Millisecond)
+		if err != nil {
+			return nil
+		}
+		conn.Close()
+		return fmt.Errorf("metrics server still up at %s", metricsAddr)
+	}, "5s", "10ms").Should(Succeed())
 }
 
 func findFreePort() int {

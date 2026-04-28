@@ -1,28 +1,26 @@
-package aggregator
+package utils
 
 import (
 	"fmt"
 	"strconv"
 	"strings"
 
+	slicev1beta1 "example.com/megamon/copied-slice-api/v1beta1"
 	"example.com/megamon/internal/k8sutils"
 	"example.com/megamon/internal/records"
 	containerv1beta1 "google.golang.org/api/container/v1beta1"
 	corev1 "k8s.io/api/core/v1"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	jobset "sigs.k8s.io/jobset/api/jobset/v1alpha2"
+	lws "sigs.k8s.io/lws/api/leaderworkerset/v1"
 )
 
-func extractJobSetAttrs(js *jobset.JobSet) records.Attrs {
+var log = logf.Log.WithName("aggregator-utils")
+
+func ExtractJobSetAttrs(js *jobset.JobSet) records.Attrs {
 	var attrs records.Attrs
 	var chipCount int32
 	for _, rj := range js.Spec.ReplicatedJobs {
-		// Example:
-		//
-		// nodeSelector:
-		//   cloud.google.com/gke-tpu-accelerator: tpu-v5p-slice
-		//   cloud.google.com/gke-tpu-topology: 2x2x1
-		//   cloud.google.com/gke-spot: "true"
-		//
 		for key, val := range rj.Template.Spec.Template.Spec.NodeSelector {
 			switch key {
 			case k8sutils.NodeLabelGKETPUAccelerator:
@@ -49,7 +47,36 @@ func extractJobSetAttrs(js *jobset.JobSet) records.Attrs {
 	return attrs
 }
 
-func extractNodeAttrs(node *corev1.Node) records.Attrs {
+func ExtractLeaderWorkerSetAttrs(lwsObj *lws.LeaderWorkerSet) records.Attrs {
+	var attrs records.Attrs
+	var chipCount int32
+
+	if lwsObj.Spec.LeaderWorkerTemplate.WorkerTemplate.Spec.NodeSelector != nil {
+		for key, val := range lwsObj.Spec.LeaderWorkerTemplate.WorkerTemplate.Spec.NodeSelector {
+			switch key {
+			case k8sutils.NodeLabelGKETPUAccelerator:
+				attrs.TPUAccelerator = val
+			case k8sutils.NodeLabelGKETPUTopology:
+				attrs.TPUTopology = val
+				if topologyChipCount, err := k8sutils.GetTpuTopologyToChipCount(val); err == nil {
+					// #nosec G115
+					chipCount = *lwsObj.Spec.Replicas * int32(topologyChipCount)
+				}
+			case k8sutils.NodeLabelGKESpot:
+				attrs.Spot = val == "true"
+			}
+		}
+	}
+
+	attrs.LWSName = lwsObj.Name
+	attrs.LWSNamespace = lwsObj.Namespace
+	attrs.LWSUID = string(lwsObj.UID)
+	attrs.TPUChipCount = chipCount
+
+	return attrs
+}
+
+func ExtractNodeAttrs(node *corev1.Node) records.Attrs {
 	var attrs records.Attrs
 
 	if node.Labels != nil {
@@ -70,11 +97,11 @@ func extractNodeAttrs(node *corev1.Node) records.Attrs {
 	return attrs
 }
 
-func isTPUNodePool(np *containerv1beta1.NodePool) bool {
+func IsTPUNodePool(np *containerv1beta1.NodePool) bool {
 	return np.PlacementPolicy != nil && np.PlacementPolicy.TpuTopology != ""
 }
 
-func getExpectedTPUNodePoolSize(np *containerv1beta1.NodePool) (int32, error) {
+func GetExpectedTPUNodePoolSize(np *containerv1beta1.NodePool) (int32, error) {
 	if np.PlacementPolicy == nil {
 		return 0, fmt.Errorf("no placement policy")
 	}
@@ -84,7 +111,7 @@ func getExpectedTPUNodePoolSize(np *containerv1beta1.NodePool) (int32, error) {
 		return 0, fmt.Errorf("no topology")
 	}
 
-	acceleratorCount, err := machineTypeToChipCount(np.Config.MachineType)
+	acceleratorCount, err := MachineTypeToChipCount(np.Config.MachineType)
 	if err != nil {
 		return 0, fmt.Errorf("failed to convert machine type to chip count: %w", err)
 	}
@@ -106,9 +133,7 @@ func getExpectedTPUNodePoolSize(np *containerv1beta1.NodePool) (int32, error) {
 	return int32(product / acceleratorCount), nil
 }
 
-func machineTypeToChipCount(mt string) (int, error) {
-	// Example: "ct5p-hightpu-4t"
-
+func MachineTypeToChipCount(mt string) (int, error) {
 	split := strings.Split(mt, "-")
 	if len(split) < 2 {
 		return 0, fmt.Errorf("unable to parse tpu machine type: %q", mt)
@@ -126,7 +151,7 @@ func machineTypeToChipCount(mt string) (int, error) {
 	return acceleratorCount, nil
 }
 
-func extractNodePoolAttrs(np *containerv1beta1.NodePool) records.Attrs {
+func ExtractNodePoolAttrs(np *containerv1beta1.NodePool) records.Attrs {
 	var attrs records.Attrs
 
 	attrs.NodePoolName = np.Name
@@ -136,11 +161,38 @@ func extractNodePoolAttrs(np *containerv1beta1.NodePool) records.Attrs {
 	if np.Config != nil {
 		attrs.Spot = np.Config.Spot
 		if np.Config.ResourceLabels != nil {
-			// Check for the goog-gke-accelerator-type label
 			if v, ok := np.Config.ResourceLabels[k8sutils.NodePoolResourceLabelGKEAcceleratorType]; ok && v != "" {
 				attrs.TPUAccelerator = v
 			}
 		}
 	}
+	return attrs
+}
+
+func ExtractSliceAttrs(s *slicev1beta1.Slice) records.Attrs {
+	attrs := records.Attrs{
+		SliceName:      s.Name,
+		SliceUID:       string(s.UID),
+		TPUAccelerator: string(s.Spec.Type),
+		TPUTopology:    s.Spec.Topology,
+	}
+
+	if s.Labels != nil {
+		if val, ok := s.Labels[k8sutils.LabelTPUProvisionerOwnerName]; ok {
+			attrs.SliceOwnerName = val
+		}
+		if val, ok := s.Labels[k8sutils.LabelTPUProvisionerOwnerKind]; ok {
+			attrs.SliceOwnerKind = val
+		}
+		if val, ok := s.Labels[k8sutils.LabelTPUProvisionerOwnerNamespace]; ok {
+			attrs.SliceOwnerNamespace = val
+		}
+	}
+
+	if chipCount, err := k8sutils.GetTpuTopologyToChipCount(s.Spec.Topology); err == nil {
+		// #nosec G115
+		attrs.TPUChipCount = int32(chipCount)
+	}
+
 	return attrs
 }

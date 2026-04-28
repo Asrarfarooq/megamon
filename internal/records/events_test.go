@@ -227,7 +227,7 @@ func TestSummarize(t *testing.T) {
 				LatestUpTimeBetweenInterruption: 2 * time.Hour,
 			},
 		},
-		"two interruptions one recovery": {
+		"two interruptions one recovery with trailing downtime": {
 			// up:         _____   _____
 			// down:   ____|   |___|   |___
 			// event:  0   1   2   3   4
@@ -330,6 +330,40 @@ func TestSummarize(t *testing.T) {
 			now:             t0.Add(time.Hour),
 			expectedSummary: EventSummary{},
 		},
+		"invalid data: second event not up": {
+			records: EventRecords{
+				UpEvents: []UpEvent{
+					{Up: false, Timestamp: t0},
+					{Up: false, Timestamp: t0.Add(time.Hour)},
+				},
+			},
+			now:             t0.Add(time.Hour),
+			expectedSummary: EventSummary{},
+		},
+		"unexpected recovery from expected downtime": {
+			records: EventRecords{
+				UpEvents: []UpEvent{
+					{Up: false, Timestamp: t0},
+					{Up: true, Timestamp: t0.Add(time.Hour)},
+					{Up: false, Timestamp: t0.Add(2 * time.Hour), ExpectedDown: true},
+					{Up: true, Timestamp: t0.Add(3 * time.Hour)},
+				},
+			},
+			now: t0.Add(3 * time.Hour),
+			expectedSummary: EventSummary{
+				DownTimeInitial:                 time.Hour,
+				UpTime:                          time.Hour,
+				DownTime:                        2 * time.Hour,
+				InterruptionCount:               0,
+				TotalUpTimeBetweenInterruption:  0,
+				MeanUpTimeBetweenInterruption:   0,
+				LatestUpTimeBetweenInterruption: time.Hour,
+				RecoveryCount:                   0,
+				TotalDownTimeBetweenRecovery:    time.Hour,
+				MeanDownTimeBetweenRecovery:     0,
+				LatestDownTimeBetweenRecovery:   time.Hour,
+			},
+		},
 		"expected downtime interruption": {
 			records: EventRecords{
 				// up:         _____
@@ -377,7 +411,7 @@ func TestSummarize(t *testing.T) {
 	}
 }
 
-func TestReconcileEvents(t *testing.T) {
+func TestAppendStateChangeEvents(t *testing.T) {
 	t.Parallel()
 
 	now := time.Now()
@@ -611,6 +645,35 @@ func TestReconcileEvents(t *testing.T) {
 			unknownThreshold: 1.0,
 			expChanged:       false,
 		},
+		"remove stale event": {
+			inputUps: map[string]Upness{
+				"abc": {
+					ExpectedCount: 1,
+					ReadyCount:    1,
+				},
+			},
+			inputEvents: map[string]EventRecords{
+				"abc": {
+					UpEvents: []UpEvent{
+						{Up: true, Timestamp: now.Add(-time.Minute)},
+					},
+				},
+				"def": {
+					UpEvents: []UpEvent{
+						{Up: false, Timestamp: now.Add(-time.Minute)},
+					},
+				},
+			},
+			expEvents: map[string]EventRecords{
+				"abc": {
+					UpEvents: []UpEvent{
+						{Up: true, Timestamp: now.Add(-time.Minute)},
+					},
+				},
+			},
+			unknownThreshold: 1.0,
+			expChanged:       true,
+		},
 		"still up": {
 			inputUps: map[string]Upness{
 				"abc": {
@@ -644,7 +707,7 @@ func TestReconcileEvents(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			events := c.inputEvents
-			gotChanged := ReconcileEvents(ctx, now, c.inputUps, events, c.unknownThreshold)
+			gotChanged := AppendStateChangeEvents(ctx, now, c.inputUps, events, c.unknownThreshold)
 			require.Equal(t, c.expEvents, events)
 			require.Equal(t, c.expChanged, gotChanged)
 		})

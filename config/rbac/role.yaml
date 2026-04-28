@@ -9,6 +9,7 @@ rules:
   resources:
   - configmaps
   verbs:
+  - create
   - get
   - list
   - patch
@@ -23,12 +24,6 @@ rules:
   - get
   - list
   - watch
-- apiGroups:
-  - ""
-  resources:
-  - nodes/status
-  verbs:
-  - get
 - apiGroups:
   - jobset.x-k8s.io
   resources:

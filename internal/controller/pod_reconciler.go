@@ -71,7 +71,7 @@ func (r *PodReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.R
 		return ctrl.Result{}, nil
 	}
 
-	r.Aggregator.SetNodePoolScheduling(nodePool, rec)
+	r.Aggregator.UpdateNodePoolScheduling(nodePool, rec)
 
 	if !r.DisableNodePoolJobLabelling {
 		var jobRef metav1.OwnerReference

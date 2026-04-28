@@ -3,7 +3,11 @@ package gkeclient
 import (
 	"context"
 	"fmt"
+	"time"
 
+	"example.com/megamon/internal/metrics"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 	containerv1beta1 "google.golang.org/api/container/v1beta1"
 )
 
@@ -14,7 +18,12 @@ type Client struct {
 }
 
 func (c *Client) ListNodePools(ctx context.Context) ([]*containerv1beta1.NodePool, error) {
+	start := time.Now()
 	npListResp, err := c.ContainersService.Projects.Locations.Clusters.NodePools.List(c.ClusterRef).Context(ctx).Do()
+	metrics.GKELatency.Record(ctx, time.Since(start).Seconds(), metric.WithAttributes(
+		attribute.String("method", "ListNodePools"),
+		attribute.Bool("error", err != nil),
+	))
 	if err != nil {
 		return nil, fmt.Errorf("listing node pools: %w", err)
 	}
