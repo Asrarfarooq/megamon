@@ -138,6 +138,8 @@ func TestSummarize(t *testing.T) {
 				TotalUpTimeBetweenInterruption:  time.Hour,
 				MeanUpTimeBetweenInterruption:   time.Hour,
 				LatestUpTimeBetweenInterruption: time.Hour,
+				ProvisioningDuration:            time.Hour,
+				ProvisioningState:               "success",
 			},
 		},
 		"single interruption single recovery": {
@@ -169,6 +171,8 @@ func TestSummarize(t *testing.T) {
 				TotalUpTimeBetweenInterruption:  time.Hour,
 				MeanUpTimeBetweenInterruption:   time.Hour,
 				LatestUpTimeBetweenInterruption: time.Hour,
+				ProvisioningDuration:            time.Hour,
+				ProvisioningState:               "success",
 			},
 		},
 		"single interruption single recovery then up for an hour": {
@@ -200,6 +204,8 @@ func TestSummarize(t *testing.T) {
 				TotalUpTimeBetweenInterruption:  time.Hour,
 				MeanUpTimeBetweenInterruption:   time.Hour,
 				LatestUpTimeBetweenInterruption: time.Hour,
+				ProvisioningDuration:            time.Hour,
+				ProvisioningState:               "success",
 			},
 		},
 		"two interruptions single recovery": {
@@ -233,6 +239,8 @@ func TestSummarize(t *testing.T) {
 				TotalUpTimeBetweenInterruption:  1*time.Hour + 2*time.Hour,
 				MeanUpTimeBetweenInterruption:   (1*time.Hour + 2*time.Hour) / 2,
 				LatestUpTimeBetweenInterruption: 2 * time.Hour,
+				ProvisioningDuration:            time.Hour,
+				ProvisioningState:               "success",
 			},
 		},
 		"two interruptions one recovery with trailing downtime": {
@@ -266,6 +274,8 @@ func TestSummarize(t *testing.T) {
 				TotalUpTimeBetweenInterruption:  1*time.Hour + 2*time.Hour,
 				MeanUpTimeBetweenInterruption:   (1*time.Hour + 2*time.Hour) / 2,
 				LatestUpTimeBetweenInterruption: 2 * time.Hour,
+				ProvisioningDuration:            time.Hour,
+				ProvisioningState:               "success",
 			},
 		},
 		"two interruptions two recoveries - different durations": {
@@ -301,6 +311,8 @@ func TestSummarize(t *testing.T) {
 				TotalUpTimeBetweenInterruption:  1*time.Hour + 2*time.Hour,
 				MeanUpTimeBetweenInterruption:   (1*time.Hour + 2*time.Hour) / 2,
 				LatestUpTimeBetweenInterruption: 2 * time.Hour,
+				ProvisioningDuration:            time.Hour,
+				ProvisioningState:               "success",
 			},
 		},
 		// Error cases
@@ -370,6 +382,8 @@ func TestSummarize(t *testing.T) {
 				TotalDownTimeBetweenRecovery:    time.Hour,
 				MeanDownTimeBetweenRecovery:     0,
 				LatestDownTimeBetweenRecovery:   time.Hour,
+				ProvisioningDuration:            time.Hour,
+				ProvisioningState:               "success",
 			},
 		},
 		"expected downtime interruption": {
